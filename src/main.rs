@@ -205,10 +205,8 @@ impl<F: FieldExt> FibChip<F> {
     fn expose_public(
         &self,
         mut layouter: impl Layouter<F>,
-        n_cell: &AssignedCell<F, F>,
         r_cell: &AssignedCell<F, F>,
     ) -> Result<(), Error> {
-        layouter.constrain_instance(n_cell.cell(), self.config.instance, 0)?;
         layouter.constrain_instance(r_cell.cell(), self.config.instance, 1)?;
         Ok(())
     }
@@ -259,7 +257,7 @@ impl<F: FieldExt> Circuit<F> for FibCircuit<F> {
         for _ in self.n.get_lower_32() as usize..FibChip::<F>::MAX_N {
             (n, r) = chip.assign_padding_row(layouter.namespace(|| "padding row"), &n, &r)?;
         }
-        chip.expose_public(layouter.namespace(|| "expose public"), &n, &r)?;
+        chip.expose_public(layouter.namespace(|| "expose public"), &r)?;
         Ok(())
     }
 }
@@ -269,4 +267,20 @@ fn main() {
 
     MockProver::run(9, &circuit, vec![vec![Fp::from(5), Fp::from(8)]]).unwrap();
     MockProver::run(9, &circuit, vec![vec![Fp::from(5), Fp::from(9)]]).unwrap();
+}
+
+
+#[test]
+fn plot_fibo1() {
+    use plotters::prelude::*;
+
+    let root = BitMapBackend::new("fib-layout.png", (1024, 3096)).into_drawing_area();
+    root.fill(&WHITE).unwrap();
+    let root = root.titled("Fib Layout", ("sans-serif", 60)).unwrap();
+
+    let circuit = FibCircuit { n: Fp::from(5) };
+    halo2_proofs::dev::CircuitLayout::default()
+        .mark_equality_cells(true)
+        .render(4, &circuit, &root)
+        .unwrap();
 }
