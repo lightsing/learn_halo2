@@ -324,9 +324,9 @@ fn main() {
         MockProver::run(9, &circuit, vec![vec![Fp::from(5), Fp::from(8)]]).unwrap();
     prover_success.assert_satisfied();
 
-    let prover_success =
+    let prover_failure =
         MockProver::run(9, &circuit, vec![vec![Fp::from(5), Fp::from(18)]]).unwrap();
-    prover_success.verify().unwrap_err();
+    prover_failure.verify().unwrap_err();
 }
 
 #[test]
