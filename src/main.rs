@@ -1,4 +1,4 @@
-use halo2_proofs::circuit::AssignedCell;
+use halo2_proofs::circuit::{AssignedCell, Region};
 use halo2_proofs::dev::MockProver;
 use halo2_proofs::halo2curves::secp256k1::Fp;
 use halo2_proofs::{
@@ -10,6 +10,7 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use std::marker::PhantomData;
+use halo2_proofs::circuit::floor_planner::V1;
 
 /// Layout
 /// ```
@@ -75,13 +76,15 @@ impl<F: FieldExt> FibChip<F> {
             let s = meta.query_advice(col_s, Rotation::cur());
             let first_row = meta.query_selector(fist_row_selector);
             let fixed = meta.query_fixed(fixed, Rotation::cur());
-            let input_n = meta.query_instance(instance, Rotation::cur());
+            // SHOULD NEVER USE THIS, USE layouter.constrain_equal() INSTEAD
+            // AS GATE constraint IS APPLIED FOR EVERY ROW
+            // let input_n = meta.query_instance(instance, Rotation::cur());
 
             vec![
                 // initial value from fixed[0]
                 first_row.clone() * (fixed.clone() - l) * (fixed.clone() - r) * (fixed - s),
                 // initial value from instance[0]
-                first_row * (n - input_n),
+                // first_row * (n - input_n),
             ]
         });
 
@@ -117,6 +120,7 @@ impl<F: FieldExt> FibChip<F> {
             let s = meta.query_advice(col_s, Rotation::cur());
             let fib_s = meta.query_selector(fib_selector);
 
+            // fib_s = 1 and s = r' = l+r
             vec![
                 // fib constraint r_{n+1} = l_n + r_n
                 fib_s.clone() * s.clone() * (l + r.clone() - r_next.clone()),
@@ -136,99 +140,88 @@ impl<F: FieldExt> FibChip<F> {
 
     fn assign_first_row(
         &self,
-        mut layouter: impl Layouter<F>,
+        mut region: &mut Region<'_, F>,
+        offset: usize,
     ) -> Result<(AssignedCell<F, F>, AssignedCell<F, F>, AssignedCell<F, F>), Error> {
         let [col_n, col_l, col_r, col_s] = self.config.advice;
 
-        layouter.assign_region(
-            || "first row",
-            |mut region| {
-                self.config.fist_row_selector.enable(&mut region, 0)?;
-                self.config.fib_selector.enable(&mut region, 0)?;
+        self.config.fist_row_selector.enable(&mut region, offset)?;
+        self.config.fib_selector.enable(&mut region, offset)?;
 
 
-                let n_cell = region.assign_advice_from_instance(
-                    || "initial n",
-                    self.config.instance,
-                    0,
-                    col_n,
-                    0,
-                )?;
+        let n_cell = region.assign_advice_from_instance(
+            || "initial n",
+            self.config.instance,
+            0,
+            col_n,
+            offset,
+        )?;
 
-                region.assign_fixed(
-                    || "initial status",
-                    self.config.fixed,
-                    0,
-                    || Value::known(F::one()),
-                )?;
-                let l_cell =
-                    region.assign_advice_from_constant(|| "initial l", col_l, 0, F::one())?;
-                let r_cell =
-                    region.assign_advice_from_constant(|| "initial r", col_r, 0, F::one())?;
-                region.assign_advice_from_constant(|| "s", col_s, 0, F::one())?;
-                Ok((n_cell, l_cell, r_cell))
-            },
-        )
+        region.assign_fixed(
+            || "initial status",
+            self.config.fixed,
+            offset,
+            || Value::known(F::one()),
+        )?;
+        let l_cell =
+            region.assign_advice_from_constant(|| "initial l", col_l, offset, F::one())?;
+        let r_cell =
+            region.assign_advice_from_constant(|| "initial r", col_r, offset, F::one())?;
+        region.assign_advice_from_constant(|| "s", col_s, offset, F::one())?;
+        Ok((n_cell, l_cell, r_cell))
     }
 
     fn assign_computational_row(
         &self,
-        mut layouter: impl Layouter<F>,
+        mut region: &mut Region<'_, F>,
+        offset: usize,
         is_last: bool,
         last_n: AssignedCell<F, F>,
         last_l: AssignedCell<F, F>,
         last_r: AssignedCell<F, F>,
     ) -> Result<(AssignedCell<F, F>, AssignedCell<F, F>, AssignedCell<F, F>), Error> {
         let [col_n, _, col_r, col_s] = self.config.advice;
-        layouter.assign_region(
-            || "other rows",
-            |mut region| {
-                self.config.fib_selector.enable(&mut region, 0)?;
+        self.config.fib_selector.enable(&mut region, offset)?;
 
-                let n_cell = region.assign_advice(
-                    || "n",
-                    col_n,
-                    0,
-                    || last_n.value().map(|v| *v - F::one()),
-                )?;
-                let l_cell = last_r.copy_advice(|| "l", &mut region, self.config.advice[1], 0)?;
-                let r_cell = region.assign_advice(
-                    || "r",
-                    col_r,
-                    0,
-                    || last_l.value().and_then(|l| last_r.value().map(|r| *l + *r)),
-                )?;
-                if is_last {
-                    region.assign_advice(|| "s", col_s, 0, || Value::known(F::zero()))?;
-                } else {
-                    region.assign_advice(|| "s", col_s, 0, || Value::known(F::one()))?;
-                }
-                Ok((n_cell, l_cell, r_cell))
-            },
-        )
+        let n_cell = region.assign_advice(
+            || "n",
+            col_n,
+            offset,
+            || last_n.value().map(|v| *v - F::one()),
+        )?;
+        let l_cell = last_r.copy_advice(|| "l", &mut region, self.config.advice[1], offset)?;
+        let r_cell = region.assign_advice(
+            || "r",
+            col_r,
+            offset,
+            || last_l.value().and_then(|l| last_r.value().map(|r| *l + *r)),
+        )?;
+        if is_last {
+            region.assign_advice(|| "s", col_s, offset, || Value::known(F::zero()))?;
+        } else {
+            region.assign_advice(|| "s", col_s, offset, || Value::known(F::one()))?;
+        }
+        Ok((n_cell, l_cell, r_cell))
     }
 
     fn assign_padding_row(
         &self,
-        mut layouter: impl Layouter<F>,
+        mut region: &mut Region<'_, F>,
+        offset: usize,
         is_last: bool,
         result: &AssignedCell<F, F>,
     ) -> Result<AssignedCell<F, F>, Error> {
         let [col_n, col_l, col_r, col_s] = self.config.advice;
-        layouter.assign_region(
-            || "padding row",
-            |mut region| {
-                self.config.fib_selector.enable(&mut region, 0)?;
-                region.assign_advice(|| "n", col_n, 0, || Value::known(F::zero()))?;
-                result.copy_advice(|| "l", &mut region, col_l, 0)?;
-                let r_cell = result.copy_advice(|| "r", &mut region, col_r, 0)?;
-                if is_last {
-                    result.copy_advice(|| "r", &mut region, col_r, 1)?;
-                }
-                region.assign_advice(|| "s", col_s, 0, || Value::known(F::zero()))?;
-                Ok(r_cell)
-            },
-        )
+        self.config.fib_selector.enable(&mut region, offset)?;
+        region.assign_advice(|| "n", col_n, offset, || Value::known(F::zero()))?;
+        result.copy_advice(|| "l", &mut region, col_l, offset)?;
+        // NO NEED to use copy constraint
+        let r_cell = result.copy_advice(|| "r", &mut region, col_r, offset)?;
+        if is_last {
+            result.copy_advice(|| "r", &mut region, col_r, offset+1)?;
+        }
+        region.assign_advice(|| "s", col_s, offset, || Value::known(F::zero()))?;
+        Ok(r_cell)
     }
 
     fn expose_public(
@@ -280,17 +273,33 @@ impl<F: FieldExt> Circuit<F> for FibCircuit<F> {
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
         let chip = FibChip::construct(config);
-        let (mut n, mut l, mut r) = chip.assign_first_row(layouter.namespace(|| "first_row"))?;
+        let r = layouter.assign_region(
+            || "rows",
+            |mut region| {
+                let mut offset = 0;
+                let mut n;
+                let mut l;
+                let mut r;
+                (n, l, r) = chip.assign_first_row(&mut region, offset)?;
+                offset += 1;
 
-        for _ in 1..(self.n.get_lower_32()-1) {
-            (n, l, r) =
-                chip.assign_computational_row(layouter.namespace(|| "computational row"), false, n, l, r)?;
-        }
-        (n, l, r) = chip.assign_computational_row(layouter.namespace(|| "computational row"), true, n, l, r)?;
-        for _ in self.n.get_lower_32() as usize..(FibChip::<F>::MAX_N - 1) {
-            r = chip.assign_padding_row(layouter.namespace(|| "padding row"), false, &r)?;
-        }
-        chip.assign_padding_row(layouter.namespace(|| "padding row"), true, &r)?;
+                for _ in 1..(self.n.get_lower_32()-1) {
+                    (n, l, r) =
+                        chip.assign_computational_row(&mut region, offset, false, n.clone(), l.clone(), r.clone())?;
+                    offset += 1;
+                }
+                (n, l, r) = chip.assign_computational_row(&mut region, offset, true, n.clone(), l.clone(), r.clone())?;
+                offset += 1;
+                for _ in self.n.get_lower_32() as usize..(FibChip::<F>::MAX_N - 1) {
+                    r = chip.assign_padding_row(&mut region, offset, false, &r)?;
+                    offset += 1;
+                }
+                chip.assign_padding_row(&mut region, offset, true, &r)?;
+
+                Ok(r)
+            }
+        )?;
+
         chip.expose_public(layouter.namespace(|| "expose public"), &r)?;
         Ok(())
     }
