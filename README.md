@@ -28,7 +28,7 @@ The rows used is defined as a constant `MAX`.
 ### gate for fibonacci
 
 - when `n != 0`, `l' = r, r' = l + r, n' = n - 1`, which in human language: for nth row, l is fib(n) and r is fib(n + 1)
-- when `n == 0`, `l' = r, r' = l, n' = 0`
+- when `n == 0`, `l' = r, r' = r, n' = 0`
 
 ### gate for zero "gadget"
 
