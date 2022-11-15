@@ -10,7 +10,6 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use std::marker::PhantomData;
-use halo2_proofs::circuit::floor_planner::V1;
 
 /// Layout
 /// ```
@@ -70,15 +69,11 @@ impl<F: FieldExt> FibChip<F> {
         meta.enable_equality(instance);
 
         meta.create_gate("start status", |meta| {
-            let n = meta.query_advice(col_n, Rotation::cur());
             let l = meta.query_advice(col_l, Rotation::cur());
             let r = meta.query_advice(col_r, Rotation::cur());
             let s = meta.query_advice(col_s, Rotation::cur());
             let first_row = meta.query_selector(fist_row_selector);
             let fixed = meta.query_fixed(fixed, Rotation::cur());
-            // SHOULD NEVER USE THIS, USE layouter.constrain_equal() INSTEAD
-            // AS GATE constraint IS APPLIED FOR EVERY ROW
-            // let input_n = meta.query_instance(instance, Rotation::cur());
 
             vec![
                 // initial value from fixed[0]
@@ -91,12 +86,13 @@ impl<F: FieldExt> FibChip<F> {
         meta.create_gate("custom selector", |meta| {
             let s = meta.query_advice(col_s, Rotation::cur());
             let s_next = meta.query_advice(col_s, Rotation::next());
+            let fib_s = meta.query_selector(fib_selector);
 
             vec![
                 // bool value
-                s.clone() * (Expression::Constant(F::one()) - s.clone()),
+                fib_s.clone() * s.clone() * (Expression::Constant(F::one()) - s.clone()),
                 // cannot go back to 1 once become 0
-                s_next * (Expression::Constant(F::one()) - s),
+                fib_s * s_next * (Expression::Constant(F::one()) - s),
             ]
         });
 
@@ -104,12 +100,15 @@ impl<F: FieldExt> FibChip<F> {
             let n = meta.query_advice(col_n, Rotation::cur());
             let n_next = meta.query_advice(col_n, Rotation::next());
             let s = meta.query_advice(col_s, Rotation::cur());
+            let fib_s = meta.query_selector(fib_selector);
 
             vec![
                 // n_next = n - 1
-                s.clone() * (n.clone() - n_next.clone() - Expression::Constant(F::one())),
+                fib_s.clone()
+                    * s.clone()
+                    * (n.clone() - n_next.clone() - Expression::Constant(F::one())),
                 // n_next = 0
-                (Expression::Constant(F::one()) - s) * n_next,
+                fib_s * (Expression::Constant(F::one()) - s) * n_next,
             ]
         });
 
@@ -148,7 +147,6 @@ impl<F: FieldExt> FibChip<F> {
         self.config.fist_row_selector.enable(&mut region, offset)?;
         self.config.fib_selector.enable(&mut region, offset)?;
 
-
         let n_cell = region.assign_advice_from_instance(
             || "initial n",
             self.config.instance,
@@ -163,10 +161,8 @@ impl<F: FieldExt> FibChip<F> {
             offset,
             || Value::known(F::one()),
         )?;
-        let l_cell =
-            region.assign_advice_from_constant(|| "initial l", col_l, offset, F::one())?;
-        let r_cell =
-            region.assign_advice_from_constant(|| "initial r", col_r, offset, F::one())?;
+        let l_cell = region.assign_advice_from_constant(|| "initial l", col_l, offset, F::one())?;
+        let r_cell = region.assign_advice_from_constant(|| "initial r", col_r, offset, F::one())?;
         region.assign_advice_from_constant(|| "s", col_s, offset, F::one())?;
         Ok((n_cell, l_cell, r_cell))
     }
@@ -209,26 +205,31 @@ impl<F: FieldExt> FibChip<F> {
         mut region: &mut Region<'_, F>,
         offset: usize,
         is_last: bool,
-        result: &AssignedCell<F, F>,
+        result: AssignedCell<F, F>,
     ) -> Result<AssignedCell<F, F>, Error> {
         let [col_n, col_l, col_r, col_s] = self.config.advice;
         self.config.fib_selector.enable(&mut region, offset)?;
         region.assign_advice(|| "n", col_n, offset, || Value::known(F::zero()))?;
-        result.copy_advice(|| "l", &mut region, col_l, offset)?;
-        // NO NEED to use copy constraint
-        let r_cell = result.copy_advice(|| "r", &mut region, col_r, offset)?;
-        if is_last {
-            result.copy_advice(|| "r", &mut region, col_r, offset+1)?;
-        }
+        region.assign_advice(|| "l", col_l, offset, || result.value().copied())?;
+
+        let r_cell = region.assign_advice(|| "r", col_r, offset, || result.value().copied())?;
         region.assign_advice(|| "s", col_s, offset, || Value::known(F::zero()))?;
+        if is_last {
+            region.assign_advice(|| "n", col_n, offset + 1, || Value::known(F::zero()))?;
+            region.assign_advice(|| "r", col_r, offset + 1, || result.value().copied())?;
+            region.assign_advice(|| "l", col_l, offset + 1, || result.value().copied())?;
+            region.assign_advice(|| "s", col_s, offset + 1, || Value::known(F::zero()))?;
+        }
         Ok(r_cell)
     }
 
     fn expose_public(
         &self,
         mut layouter: impl Layouter<F>,
+        n_cell: &AssignedCell<F, F>,
         r_cell: &AssignedCell<F, F>,
     ) -> Result<(), Error> {
+        layouter.constrain_instance(n_cell.cell(), self.config.instance, 0)?;
         layouter.constrain_instance(r_cell.cell(), self.config.instance, 1)?;
         Ok(())
     }
@@ -273,34 +274,45 @@ impl<F: FieldExt> Circuit<F> for FibCircuit<F> {
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
         let chip = FibChip::construct(config);
-        let r = layouter.assign_region(
+        let (initial_n, r) = layouter.assign_region(
             || "rows",
             |mut region| {
                 let mut offset = 0;
-                let mut n;
-                let mut l;
-                let mut r;
-                (n, l, r) = chip.assign_first_row(&mut region, offset)?;
+                let (mut n, mut l, mut r) = chip.assign_first_row(&mut region, offset)?;
+                let initial_n = n.clone();
                 offset += 1;
 
-                for _ in 1..(self.n.get_lower_32()-1) {
-                    (n, l, r) =
-                        chip.assign_computational_row(&mut region, offset, false, n.clone(), l.clone(), r.clone())?;
+                for _ in 1..(self.n.get_lower_32() - 1) {
+                    (n, l, r) = chip.assign_computational_row(
+                        &mut region,
+                        offset,
+                        false,
+                        n.clone(),
+                        l.clone(),
+                        r.clone(),
+                    )?;
                     offset += 1;
                 }
-                (n, l, r) = chip.assign_computational_row(&mut region, offset, true, n.clone(), l.clone(), r.clone())?;
+                (_, _, r) = chip.assign_computational_row(
+                    &mut region,
+                    offset,
+                    true,
+                    n.clone(),
+                    l.clone(),
+                    r.clone(),
+                )?;
                 offset += 1;
                 for _ in self.n.get_lower_32() as usize..(FibChip::<F>::MAX_N - 1) {
-                    r = chip.assign_padding_row(&mut region, offset, false, &r)?;
+                    r = chip.assign_padding_row(&mut region, offset, false, r)?;
                     offset += 1;
                 }
-                chip.assign_padding_row(&mut region, offset, true, &r)?;
+                r = chip.assign_padding_row(&mut region, offset, true, r)?;
 
-                Ok(r)
-            }
+                Ok((initial_n, r))
+            },
         )?;
 
-        chip.expose_public(layouter.namespace(|| "expose public"), &r)?;
+        chip.expose_public(layouter.namespace(|| "expose public"), &initial_n, &r)?;
         Ok(())
     }
 }
@@ -308,17 +320,14 @@ impl<F: FieldExt> Circuit<F> for FibCircuit<F> {
 fn main() {
     let circuit = FibCircuit { n: Fp::from(5) };
 
-    let prover_success = MockProver::run(9, &circuit, vec![vec![Fp::from(5), Fp::from(8)]]).unwrap();
-
-
-    // println!("{:?}", prover_success);
-
+    let prover_success =
+        MockProver::run(9, &circuit, vec![vec![Fp::from(5), Fp::from(8)]]).unwrap();
     prover_success.assert_satisfied();
-    //
-    // let prover_success = MockProver::run(9, &circuit, vec![vec![Fp::from(5), Fp::from(18)]]).unwrap();
-    // prover_success.verify().unwrap_err();
-}
 
+    let prover_success =
+        MockProver::run(9, &circuit, vec![vec![Fp::from(5), Fp::from(18)]]).unwrap();
+    prover_success.verify().unwrap_err();
+}
 
 #[test]
 fn plot_fibo1() {
