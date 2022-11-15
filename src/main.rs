@@ -10,12 +10,19 @@ use halo2_proofs::{
     poly::Rotation,
 };
 use std::marker::PhantomData;
-use std::mem;
-use std::ops::Range;
-use halo2_proofs::arithmetic::{Field, Group};
-use halo2_proofs::dev::metadata::Region;
-use halo2_proofs::plonk::Any;
 
+/// Layout
+/// ```
+/// |  n  |     l    |    r   |  s  | first_row | fib | fixed | instance |
+/// |:---:|:--------:|:------:|:---:|:---------:|:---:|:-----:|:--------:|
+/// |  n  |     1    |    1   |  1  |     1     |  1  |   1   |     n    |
+/// | n-1 |     1    |    2   |  1  |     0     |  1  |       |  fib(n)  |
+/// | ... |    ...   |   ...  | ... |    ...    | ... |  ...  |    ...   |
+/// |  1  | fib(n-1) | fib(n) |  0  |     0     |  0  |       |          |
+/// |  0  |  fib(n)  | fib(n) |  0  |     0     |  0  |       |          |
+/// | ... |    ...   |   ...  | ... |    ...    | ... |  ...  |    ...   |
+/// |  0  |  fib(n)  | fib(n) |  0  |     0     |  0  |       |          |
+/// ```
 #[derive(Debug, Clone)]
 struct FibConfig {
     // constraint the row counts n, l & r calc the fib and a selector
@@ -315,6 +322,6 @@ fn plot_fibo1() {
     let circuit = FibCircuit { n: Fp::from(5) };
     halo2_proofs::dev::CircuitLayout::default()
         .show_equality_constraints(true)
-        .render(4, &circuit, &root)
+        .render(9, &circuit, &root)
         .unwrap();
 }
