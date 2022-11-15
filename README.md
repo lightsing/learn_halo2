@@ -1,15 +1,16 @@
 ## learn_halo2
 ### Layout
-|  row  |    n   |     l    |    r   |    s   | first_row |   fib  |  fixed | instance |
-|:-----:|:------:|:--------:|:------:|:------:|:---------:|:------:|:------:|:--------:|
-|   0   |    n   |     1    |    1   |    1   |     1     |    1   |    1   |     n    |
-|   1   |   n-1  |     1    |    2   |    1   |     0     |    1   |        |  fib(n)  |
-|       |   ...  |    ...   |   ...  |   ...  |    ...    |   ...  |   ...  |    ...   |
-|  n-2  |    1   | fib(n-1) | fib(n) |    0   |     0     |    1   |        |          |
-|  n-1  |    0   |  fib(n)  | fib(n) |    0   |     0     |    1   |        |          |
-|       |   ...  |    ...   |   ...  |   ...  |    ...    |   ...  |   ...  |    ...   |
-|  MAX  |    0   |  fib(n)  | fib(n) |    0   |     0     |    1   |        |          |
-| MAX+1 | UNUSED |  UNUSED  | UNUSED | UNUSED |   UNUSED  | UNUSED | UNUSED |  UNUSED  |
+|  row  |    n   |     l    |    r   |    s   | first_row |    fib   |  fixed | instance |
+|:-----:|:------:|:--------:|:------:|:------:|:---------:|:--------:|:------:|:--------:|
+|       | Advice |  Advice  | Advice | Advice |  Selector | Selector |  Fixed | Instance |
+|   0   |    n   |     1    |    1   |    1   |     1     |     1    |    1   |     n    |
+|   1   |   n-1  |     1    |    2   |    1   |     0     |     1    |        |  fib(n)  |
+|       |   ...  |    ...   |   ...  |   ...  |    ...    |    ...   |   ...  |    ...   |
+|  n-2  |    1   | fib(n-1) | fib(n) |    0   |     0     |     1    |        |          |
+|  n-1  |    0   |  fib(n)  | fib(n) |    0   |     0     |     1    |        |          |
+|       |   ...  |    ...   |   ...  |   ...  |    ...    |    ...   |   ...  |    ...   |
+|  MAX  |    0   |  fib(n)  | fib(n) |    0   |     0     |     1    |        |          |
+| MAX+1 | UNUSED |  UNUSED  | UNUSED | UNUSED |   UNUSED  |  UNUSED  | UNUSED |  UNUSED  |
 
 ### Constraint Design
 
