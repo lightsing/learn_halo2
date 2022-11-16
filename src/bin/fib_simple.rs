@@ -2,6 +2,7 @@
 //!
 //! we are going to prove that fib(5) = 8 when fib(0) = 0, fib(1) = 1
 
+use halo2_proofs::circuit::Cell;
 use halo2_proofs::{
     arithmetic::FieldExt,
     circuit::{AssignedCell, Layouter, Region, SimpleFloorPlanner, Value},
@@ -16,8 +17,8 @@ use std::marker::PhantomData;
 struct FibConfig {
     // [a, b, c]
     advice: [Column<Advice>; 3],
-    instance: Column<Instance>,
     selector: Selector,
+    instance: Column<Instance>,
 }
 
 struct FibChip<F: FieldExt> {
@@ -36,8 +37,8 @@ impl<F: FieldExt> FibChip<F> {
     fn configure(
         meta: &mut ConstraintSystem<F>,
         [col_a, col_b, col_c]: [Column<Advice>; 3],
-        instance: Column<Instance>,
         selector: Selector,
+        instance: Column<Instance>,
     ) -> FibConfig {
         meta.enable_equality(col_a);
         meta.enable_equality(col_b);
@@ -56,8 +57,8 @@ impl<F: FieldExt> FibChip<F> {
 
         FibConfig {
             advice: [col_a, col_b, col_c],
-            instance,
             selector,
+            instance,
         }
     }
 
@@ -66,16 +67,16 @@ impl<F: FieldExt> FibChip<F> {
         region: &mut Region<'_, F>,
         n_0: F,
         n_1: F,
-    ) -> Result<(AssignedCell<F, F>, AssignedCell<F, F>), Error> {
+    ) -> Result<(AssignedCell<F, F>, AssignedCell<F, F>, AssignedCell<F, F>), Error> {
         let [col_a, col_b, col_c] = self.config.advice;
 
         self.config.selector.enable(region, 0)?;
 
-        region.assign_advice(|| "a", col_a, 0, || Value::known(n_0))?;
+        let a = region.assign_advice(|| "a", col_a, 0, || Value::known(n_0))?;
         let b = region.assign_advice(|| "b", col_b, 0, || Value::known(n_1))?;
         let c = region.assign_advice(|| "c", col_c, 0, || Value::known(n_0 + n_1))?;
 
-        Ok((b, c))
+        Ok((a, b, c))
     }
 
     fn assign_row(
@@ -99,6 +100,19 @@ impl<F: FieldExt> FibChip<F> {
         )?;
 
         Ok((b, c))
+    }
+
+    fn expose_public(
+        &self,
+        mut layouter: impl Layouter<F>,
+        initial_a: Cell,
+        initial_b: Cell,
+        result: Cell,
+    ) -> Result<(), Error> {
+        layouter.constrain_instance(initial_a, self.config.instance, 0)?;
+        layouter.constrain_instance(initial_b, self.config.instance, 1)?;
+        layouter.constrain_instance(result, self.config.instance, 2)?;
+        Ok(())
     }
 }
 
@@ -124,7 +138,7 @@ impl<F: FieldExt> Circuit<F> for FibCircuit<F> {
         let instance = meta.instance_column();
         let selector = meta.selector();
 
-        FibChip::configure(meta, [col_a, col_b, col_c], instance, selector)
+        FibChip::configure(meta, [col_a, col_b, col_c], selector, instance)
     }
 
     fn synthesize(
@@ -133,17 +147,24 @@ impl<F: FieldExt> Circuit<F> for FibCircuit<F> {
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
         let chip = FibChip::construct(config);
-        let result = layouter.assign_region(
+        let (initial_a, initial_b, result) = layouter.assign_region(
             || "rows",
             |mut region| {
-                let (mut b, mut c) = chip.assign_setup(&mut region, self.n_0, self.n_1)?;
+                let (initial_a, mut b, mut c) =
+                    chip.assign_setup(&mut region, self.n_0, self.n_1)?;
+                let initial_b = b.clone();
                 for row in 1..self.n.get_lower_32() as usize {
                     (b, c) = chip.assign_row(&mut region, row, b, c)?;
                 }
-                Ok(c)
+                Ok((initial_a, initial_b, c))
             },
         )?;
-        layouter.constrain_instance(result.cell(), chip.config.instance, 0)?;
+        chip.expose_public(
+            layouter.namespace(|| "expose_public"),
+            initial_a.cell(),
+            initial_b.cell(),
+            result.cell(),
+        )?;
         Ok(())
     }
 }
@@ -155,8 +176,18 @@ fn main() {
         n_1: Fp::from(1),
     };
 
-    let prover_success = MockProver::run(4, &circuit, vec![vec![Fp::from(8)]]).unwrap();
+    let prover_success = MockProver::run(
+        4,
+        &circuit,
+        vec![vec![Fp::from(0), Fp::from(1), Fp::from(8)]],
+    )
+    .unwrap();
     prover_success.assert_satisfied();
-    let prover_failure = MockProver::run(4, &circuit, vec![vec![Fp::from(10)]]).unwrap();
+    let prover_failure = MockProver::run(
+        4,
+        &circuit,
+        vec![vec![Fp::from(1), Fp::from(1), Fp::from(8)]],
+    )
+    .unwrap();
     prover_failure.verify().unwrap_err();
 }
