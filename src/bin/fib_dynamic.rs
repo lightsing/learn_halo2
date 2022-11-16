@@ -1,3 +1,7 @@
+//! simple fibonacci circuit
+//!
+//! we are going to prove that fib(n) for 0 < n < MAX_N
+
 use halo2_proofs::circuit::{AssignedCell, Cell, Region};
 use halo2_proofs::dev::MockProver;
 use halo2_proofs::halo2curves::secp256k1::Fp;
